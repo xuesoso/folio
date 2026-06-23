@@ -1,0 +1,9 @@
+/target
+
+# Project spec / assistant notes — not part of the published project.
+/CLAUDE.md
+
+# OS / editor cruft.
+.DS_Store
+*.swp
+*~

@@ -1,0 +1,52 @@
+[package]
+name = "folio"
+version = "0.2.1"
+edition = "2024"
+description = "A terminal document viewer (PDF, Markdown, LaTeX, images) rendering pages via sixel/kitty graphics protocols"
+license = "MIT"
+
+[dependencies]
+# Terminal control, input events, and pixel-size queries (does TIOCGWINSZ for us).
+crossterm = "0.29"
+# Pure-Rust PDF rasterizer — the only PDF engine (no native dependency).
+hayro = "0.7.1"
+# Pure-Rust sixel encoder (no libsixel).
+icy_sixel = "0.5"
+# Ergonomic error handling for the binary.
+anyhow = "1"
+# Cross-platform state/data directory resolution (Linux XDG vs macOS ~/Library).
+dirs = "6"
+# Fast PNG encoding for the kitty protocol: transmitting page bitmaps as PNG
+# (f=100) instead of raw RGBA shrinks a mostly-white page from megabytes to tens
+# of KB — critical for responsiveness over tmux-passthrough + SSH.
+png = "0.18"
+# Markdown → PDF conversion (the input→PDF seam for non-PDF formats). All three
+# crates are pure-Rust and lean: pulldown-cmark parses CommonMark; pdf-writer
+# emits the PDF using the standard-14 fonts (rendered via hayro's bundled Foxit
+# substitutes) for Latin text, plus an embedded DejaVu Sans (read with ttf-parser)
+# as a Unicode fallback for symbols WinAnsi can't represent (Greek, math, arrows).
+pulldown-cmark = { version = "0.13", default-features = false }
+pdf-writer = "0.15"
+ttf-parser = "0.25"
+# Static-image decoding (PNG/JPEG/GIF/WebP/BMP/TIFF) for the direct-image
+# `Document` path — no PDF round-trip. Already in the dependency tree transitively
+# via hayro and icy_sixel, so this direct dep adds no new compiled crates. Default
+# features are off; we enable just the decoders we view (resizing via `imageops`
+# is always available). Animated GIFs decode to their first frame only.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
+
+# Unix-only: poll() the controlling TTY for terminal-query responses with a hard
+# deadline (capability probe). Already in the tree via crossterm/dirs, so this is
+# a zero-cost direct dependency. Both Linux and macOS are Unix.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Optimize dependencies even in debug builds. Pure-Rust renderers (hayro/vello)
+# are compute-heavy and ~30-60x slower when unoptimized, which makes `cargo run`
+# painfully slow; this keeps our own crate debuggable while making deps fast.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = true
+codegen-units = 1

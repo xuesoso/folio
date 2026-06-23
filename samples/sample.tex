@@ -1,0 +1,108 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath}
+
+\title{folio sample document}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+This is a multi-page sample used to exercise folio's rendering and page
+navigation. The same content is provided in three parallel formats --- Markdown,
+LaTeX, and PDF --- so you can compare how each input path looks. Page with
+\texttt{n} / \texttt{p}, jump with \texttt{:n}, and zoom with \texttt{+} /
+\texttt{-}.
+
+\section{Introduction}
+folio renders document pages as images directly in your terminal using the sixel
+or kitty graphics protocols. It opens PDFs natively, converts Markdown to PDF on
+the fly, and---when you opt in via the \texttt{latex\_engine} setting---compiles
+LaTeX with an installed TeX engine. Whatever the source, the same viewer provides
+zoom, pan, dark mode, configurable sharpness, bookmarks, and resume.
+
+This document was typeset by a real TeX engine and then rasterized by folio. The
+text is intentionally long enough to span more than two pages so that multi-page
+behaviour is easy to try out.
+
+\section{Text formatting}
+Paragraphs may contain \textbf{bold}, \textit{italic}, \textbf{\textit{bold
+italic}}, and inline \texttt{code} such as \texttt{let x = 42;}. Long paragraphs
+wrap to the page width and are justified by the TeX engine, breaking cleanly and
+hyphenating where appropriate rather than running past the margin.
+
+Source line breaks are collapsed into the same paragraph, so you can keep your
+\LaTeX{} lines short without affecting the rendered output; a blank line starts a
+new paragraph.
+
+\section{Lists}
+Unordered lists, including nested items:
+\begin{itemize}
+    \item The quick brown fox jumps over the lazy dog.
+    \item A second item with a little more text so it wraps to demonstrate
+          hanging indentation under the bullet.
+    \begin{itemize}
+        \item A nested item.
+        \item Another nested item.
+    \end{itemize}
+    \item A third top-level item.
+\end{itemize}
+
+Ordered lists:
+\begin{enumerate}
+    \item Preheat the oven.
+    \item Mix the ingredients thoroughly.
+    \item Bake until golden, then let cool before serving.
+\end{enumerate}
+
+\section{Code}
+Verbatim text renders in a monospace face:
+\begin{verbatim}
+fn main() {
+    let pages = vec!["one", "two", "three"];
+    for (i, name) in pages.iter().enumerate() {
+        println!("page {}: {}", i + 1, name);
+    }
+}
+\end{verbatim}
+
+\section{A longer discussion}
+Terminal document viewers occupy a useful niche: they keep you in the
+keyboard-driven, text-first environment where so much development happens, while
+still showing real, faithfully rendered pages. Rather than dumping a lossy text
+approximation of a document, folio rasterizes the genuine page and paints it with
+a graphics protocol, so figures, fonts, and layout survive intact.
+
+Because only the page under view is rendered on demand, memory and CPU stay
+modest even for large documents, and an LRU cache plus predictive prefetch keep
+navigation feeling immediate. The same machinery that makes PDFs responsive
+applies to converted Markdown and LaTeX, since every input is normalised to PDF
+before it reaches the renderer.
+
+This uniformity is the point of the modular input layer. Adding a new input
+format is a matter of teaching folio how to turn that format into PDF bytes; the
+viewer, the cache, the themes, and the bookmark store do not need to know where
+those bytes came from. Markdown was the first such format, LaTeX the second, and
+the same seam is ready for whatever comes next.
+
+\section{Mathematics}
+Unlike the Markdown path, the LaTeX path typesets mathematics properly. Inline
+math such as $E = mc^2$ and $\sum_{i=1}^{n} i = \frac{n(n+1)}{2}$ sits naturally
+within the prose, with Greek letters like $\alpha$, $\beta$, and $\pi$ rendered as
+real glyphs.
+
+A displayed equation:
+\begin{equation}
+    \int_0^1 x^2 \, dx = \frac{1}{3},
+    \qquad
+    e^{i\pi} + 1 = 0.
+\end{equation}
+
+\section{Conclusion}
+If you can see this section, pagination is working and you have paged past the
+first page. Try toggling dark mode with \texttt{i}, adjusting sharpness with
+\texttt{[} and \texttt{]}, dropping a bookmark with \texttt{m}, and reopening the
+file to confirm it resumes where you left off.
+
+\end{document}
