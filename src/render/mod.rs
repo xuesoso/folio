@@ -1,7 +1,9 @@
 //! Rendering: terminal capability detection and the image-display protocols
-//! (sixel, kitty) used to paint PDF page bitmaps into the terminal.
+//! (sixel, kitty, iTerm2 inline images) used to paint PDF page bitmaps into the
+//! terminal.
 
 pub mod caps;
+pub mod iterm;
 pub mod kitty;
 mod kitty_diacritics;
 pub mod rgba;

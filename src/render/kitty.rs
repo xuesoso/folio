@@ -272,7 +272,7 @@ impl ImageProtocol for KittyProtocol {
 }
 
 /// Encode an image to PNG with fast compression (fdeflate-backed).
-fn encode_png(img: &RgbaImage) -> Result<Vec<u8>> {
+pub(crate) fn encode_png(img: &RgbaImage) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     let mut encoder = png::Encoder::new(&mut buf, img.width, img.height);
     encoder.set_color(png::ColorType::Rgba);
@@ -291,7 +291,7 @@ fn encode_png(img: &RgbaImage) -> Result<Vec<u8>> {
 }
 
 /// Standard base64 with padding (avoids a `base64` crate dependency).
-fn base64_encode(input: &[u8]) -> Vec<u8> {
+pub(crate) fn base64_encode(input: &[u8]) -> Vec<u8> {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = Vec::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in input.chunks(3) {

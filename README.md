@@ -61,7 +61,16 @@ folio <FILE> [--backend auto|kitty|sixel]
              [--theme off|nord]
              [--sharpness low|medium|high|full]
 folio gen-config   # write a starter config file (see below)
+folio print <FILE> [--protocol kitty|sixel] [--col N --row N --cols N --rows N]
+            [--cell-width N --cell-height N] [--tmux] [--page N]
+            [--theme off|nord] [--sharpness low|medium|high|full]
 ```
+
+`folio print` is a **headless** mode: it renders one page into a terminal cell
+box and writes the graphics escapes to stdout, then exits — no interactive
+viewer. It lets another TUI embed a document/image preview inside a sub-rectangle
+of its own screen (e.g. [rustranger](https://github.com/xuesoso/rustranger)'s
+preview pane calls it per file).
 
 `FILE` is a PDF, a Markdown file (`.md`, `.markdown`, `.mdown`, `.mkd`, `.mkdn`,
 `.mdwn`), a LaTeX file (`.tex`, `.latex`), or a static image (`.png`, `.jpg`,

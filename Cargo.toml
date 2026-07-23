@@ -1,6 +1,6 @@
 [package]
 name = "folio"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 description = "A terminal document viewer (PDF, Markdown, LaTeX, images) rendering pages via sixel/kitty graphics protocols"
 license = "MIT"
