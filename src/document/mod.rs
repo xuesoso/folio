@@ -151,12 +151,24 @@ fn from_pdf_bytes(bytes: Vec<u8>, path: &Path) -> Result<HayroDocument> {
 /// converted to PDF on the fly; LaTeX is compiled with the configured engine
 /// (`latex_engine`, opt-in) — all then render through the same pipeline.
 pub fn open_document(path: &Path, latex_engine: Option<&str>) -> Result<Box<dyn Document>> {
+    open_document_with_bg(path, latex_engine, None)
+}
+
+/// Like [`open_document`], with an optional background color that transparent
+/// images are flattened onto (default white). PDF/Markdown pages keep their own
+/// (white) page background regardless.
+pub fn open_document_with_bg(
+    path: &Path,
+    latex_engine: Option<&str>,
+    image_bg: Option<[u8; 3]>,
+) -> Result<Box<dyn Document>> {
     anyhow::ensure!(path.exists(), "file not found: {}", path.display());
 
     // Static images render directly — no PDF conversion, no panic guard (decoding
     // returns a `Result` rather than panicking the way hayro can).
     if is_image(path) {
-        return Ok(Box::new(image::ImageDocument::open(path)?));
+        let bg = image_bg.unwrap_or([255, 255, 255]);
+        return Ok(Box::new(image::ImageDocument::open(path, bg)?));
     }
 
     let doc = if is_markdown(path) {

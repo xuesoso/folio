@@ -48,6 +48,10 @@ pub struct KittyProtocol {
     /// Alternating placement id (1/2) so a new placement is created before the old
     /// is deleted — no flash, and placements never accumulate.
     region_pid: u32,
+    /// Background painted behind the tmux placeholder cells. Without it they
+    /// carry the terminal's default background, which shows through as (often
+    /// white) strips wherever an image tile doesn't fully cover its cell.
+    bg: Option<[u8; 3]>,
 }
 
 impl KittyProtocol {
@@ -59,7 +63,14 @@ impl KittyProtocol {
             tmux,
             region_img: None,
             region_pid: 0,
+            bg: None,
         }
+    }
+
+    /// Set the background painted behind tmux placeholder cells (see `bg`).
+    pub fn with_bg(mut self, bg: Option<[u8; 3]>) -> Self {
+        self.bg = bg;
+        self
     }
 
     fn push(&self, seq: &mut Vec<u8>, bytes: &[u8]) {
@@ -122,15 +133,20 @@ impl KittyProtocol {
         let controls = format!("a=T,U=1,f=100,i={},c={},r={},q=2", id, cols, rows);
         self.emit_transmit(seq, &controls, &enc.payload);
 
-        let fg = format!(
+        // fg encodes the image id; bg (when set) backs the cells so any sliver an
+        // image tile doesn't cover shows the embedder's theme, not terminal white.
+        let mut sgr = format!(
             "\x1b[38;2;{};{};{}m",
             (id >> 16) & 0xff,
             (id >> 8) & 0xff,
             id & 0xff
         );
+        if let Some([r, g, b]) = self.bg {
+            sgr.push_str(&format!("\x1b[48;2;{r};{g};{b}m"));
+        }
         for r in 0..rows {
             move_cursor(seq, at.row + r, at.col);
-            seq.extend_from_slice(fg.as_bytes());
+            seq.extend_from_slice(sgr.as_bytes());
             let mut line = String::new();
             for c in 0..cols {
                 line.push(PLACEHOLDER);
@@ -138,7 +154,7 @@ impl KittyProtocol {
                 line.push(ROWCOLUMN_DIACRITICS[c as usize]);
             }
             seq.extend_from_slice(line.as_bytes());
-            seq.extend_from_slice(b"\x1b[39m");
+            seq.extend_from_slice(b"\x1b[39;49m");
         }
     }
 

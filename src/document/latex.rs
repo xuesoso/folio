@@ -28,13 +28,7 @@ pub fn latex_to_pdf(path: &Path, engine: &str) -> Result<Vec<u8>> {
         .unwrap_or_else(|| OsStr::new("input.tex"))
         .to_os_string();
 
-    let outdir = std::env::temp_dir().join(format!(
-        "folio-latex-{}-{:08x}",
-        std::process::id(),
-        hash(path.as_os_str())
-    ));
-    std::fs::create_dir_all(&outdir)
-        .map_err(|e| anyhow::anyhow!("could not create temp dir {}: {e}", outdir.display()))?;
+    let outdir = make_temp_dir(&path)?;
 
     // Compile, then always clean up the temp directory.
     let result = compile(engine, &parent, &outdir, &input, &stem, &path);
@@ -141,7 +135,48 @@ fn error_detail(log: &str, captured: &str) -> String {
     tail.join("\n")
 }
 
-/// Small FNV-1a hash for a unique temp-dir name (avoids a hashing dependency).
+/// Create a fresh private temp directory for the compile, returning its path.
+///
+/// Uses an *exclusive* `create_dir` (mkdir(2), which fails with `AlreadyExists`
+/// on any pre-existing entry — including a symlink — at the final component)
+/// rather than `create_dir_all`, and an unpredictable name. That closes the
+/// classic `/tmp` pre-creation / symlink-swap window: an attacker can neither
+/// predict the name nor plant something folio would then write into or read
+/// back, because we only ever use a directory we just created ourselves.
+fn make_temp_dir(src: &Path) -> Result<std::path::PathBuf> {
+    let base = std::env::temp_dir();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    // Seed mixes the source path, a high-resolution clock, and the pid; the
+    // xorshift below then varies it per attempt so a collision just retries.
+    let mut seed = (hash(src.as_os_str()) as u128)
+        ^ nanos
+        ^ ((std::process::id() as u128) << 96);
+    for _ in 0..64 {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        let candidate = base.join(format!("folio-latex-{}-{:016x}", std::process::id(), seed as u64));
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "could not create temp dir {}: {e}",
+                    candidate.display()
+                ))
+            }
+        }
+    }
+    Err(anyhow::anyhow!(
+        "could not create a unique temp dir under {}",
+        base.display()
+    ))
+}
+
+/// Small FNV-1a hash mixed into the temp-dir seed (avoids a hashing dependency).
 fn hash(s: &OsStr) -> u32 {
     let mut h: u32 = 0x811c_9dc5;
     for &b in s.as_encoded_bytes() {
@@ -166,6 +201,22 @@ mod tests {
 
         assert!(build_args("tectonic", out, inp).0.iter().any(|a| a == "--outdir"));
         assert!(build_args("pdflatex", out, inp).0.iter().any(|a| a == "-no-shell-escape"));
+    }
+
+    #[test]
+    fn temp_dir_is_unique_fresh_and_exclusive() {
+        let src = Path::new("/some/doc.tex");
+        let a = make_temp_dir(src).expect("first temp dir");
+        let b = make_temp_dir(src).expect("second temp dir");
+        // Same source path, yet distinct directories — the name is not a pure
+        // function of the input, so it can't be pre-created by an attacker.
+        assert_ne!(a, b);
+        assert!(a.is_dir() && b.is_dir());
+        // Re-creating an existing dir must fail (exclusive mkdir), proving we
+        // never adopt a directory we didn't just create.
+        assert!(std::fs::create_dir(&a).is_err());
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
     }
 
     #[test]

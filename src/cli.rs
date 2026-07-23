@@ -23,7 +23,9 @@ Commands:
                                     TUI). Flags: --protocol kitty|sixel|iterm, --col,
                                     --row, --cols, --rows, --cell-width,
                                     --cell-height, --tmux, --page, --theme off|nord,
-                                    --sharpness low|medium|high|full
+                                    --sharpness low|medium|high|full,
+                                    --bg RRGGBB|none (fill the cell box with this
+                                    background; transparent images flatten onto it)
 
 Options:
   --backend <auto|kitty|sixel>      Force a display protocol (default: auto-detect)
@@ -107,6 +109,11 @@ pub struct PrintArgs {
     pub theme: Theme,
     /// Render sharpness (resolution vs. speed).
     pub sharpness: Sharpness,
+    /// Background color (RGB): transparent images are flattened onto it and the
+    /// render is padded to fill the whole cell box with it, so the embedding
+    /// UI's theme background shows instead of the terminal's. None = white
+    /// flatten, no padding (the aspect-fit image only).
+    pub bg: Option<[u8; 3]>,
 }
 
 /// Parse `std::env::args`. Exits the process directly for `--help` / `--version`.
@@ -207,9 +214,16 @@ fn parse_print(mut args: impl Iterator<Item = String>) -> Result<Command> {
     let mut page = 0usize;
     let mut theme = Theme::Off;
     let mut sharpness = Sharpness::Full;
+    let mut bg: Option<[u8; 3]> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--bg" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--bg requires a value (RRGGBB or none)"))?;
+                bg = parse_bg(&v)?;
+            }
             "--theme" => {
                 theme = match args.next().as_deref().map(Theme::parse) {
                     Some(Some(t)) => t,
@@ -272,5 +286,21 @@ fn parse_print(mut args: impl Iterator<Item = String>) -> Result<Command> {
         page,
         theme,
         sharpness,
+        bg,
     }))
+}
+
+/// Parse a `--bg` value: `RRGGBB` (optionally `#`-prefixed) or `none`.
+fn parse_bg(v: &str) -> Result<Option<[u8; 3]>> {
+    let v = v.trim();
+    if v.eq_ignore_ascii_case("none") || v.is_empty() {
+        return Ok(None);
+    }
+    let hex = v.trim_start_matches('#');
+    anyhow::ensure!(
+        hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()),
+        "--bg expects RRGGBB or none (got '{v}')"
+    );
+    let n = u32::from_str_radix(hex, 16).unwrap();
+    Ok(Some([(n >> 16) as u8, (n >> 8) as u8, n as u8]))
 }

@@ -36,7 +36,7 @@ fn run_print(args: cli::PrintArgs) -> Result<()> {
 
     use render::{ImageProtocol, Placement, IMAGE_ID};
 
-    let doc = document::open_document(&args.path, None)
+    let doc = document::open_document_with_bg(&args.path, None, args.bg)
         .with_context(|| format!("could not open {}", args.path.display()))?;
 
     // Fit the page into the pixel box, preserving aspect — the DISPLAY size that
@@ -72,14 +72,33 @@ fn run_print(args: cli::PrintArgs) -> Result<()> {
         .with_context(|| format!("rendering page {}", args.page + 1))?;
     args.theme.apply(&mut rgba.data); // Nord recolor (no-op for --theme off)
 
-    // Cell footprint from the DISPLAY size, clamped to the requested box.
-    let img_cols = disp_w.div_ceil(args.cell_w as u32).clamp(1, args.cols as u32) as u16;
-    let img_rows = disp_h.div_ceil(args.cell_h as u32).clamp(1, args.rows as u32) as u16;
+    // With --bg, pad the (themed) render onto a canvas covering the WHOLE cell
+    // box so the box shows the embedder's background, not the terminal's; the
+    // footprint is then the full box. Without it, the footprint is just the
+    // aspect-fit image.
+    let (rgba, img_cols, img_rows) = if let Some(bg) = args.bg {
+        (rgba.centered_on(box_w, box_h, bg), args.cols, args.rows)
+    } else {
+        let img_cols = disp_w.div_ceil(args.cell_w as u32).clamp(1, args.cols as u32) as u16;
+        let img_rows = disp_h.div_ceil(args.cell_h as u32).clamp(1, args.rows as u32) as u16;
+        (rgba, img_cols, img_rows)
+    };
+
+    // Sixel encodes in 6-pixel-tall bands; a height that isn't a multiple of 6
+    // gets padded by the encoder with its background register (typically white),
+    // leaving a light strip under the image. Trim to the band boundary instead —
+    // the (≤5 px) sliver of the bottom cells shows the cell background, which the
+    // embedding UI paints in its own theme.
+    let rgba = if matches!(args.protocol, cli::PrintProtocol::Sixel) && rgba.height % 6 != 0 {
+        rgba.crop(0, 0, rgba.width, rgba.height - rgba.height % 6)
+    } else {
+        rgba
+    };
 
     let mut proto: Box<dyn ImageProtocol> = match args.protocol {
         cli::PrintProtocol::Sixel => Box::new(render::sixel::SixelProtocol::new()),
         cli::PrintProtocol::Iterm => Box::new(render::iterm::ItermProtocol::new(args.tmux)),
-        cli::PrintProtocol::Kitty => Box::new(render::kitty::KittyProtocol::new(IMAGE_ID, args.tmux)),
+        cli::PrintProtocol::Kitty => Box::new(render::kitty::KittyProtocol::new(IMAGE_ID, args.tmux).with_bg(args.bg)),
     };
     let enc = proto.encode(&rgba)?;
     let place = Placement {

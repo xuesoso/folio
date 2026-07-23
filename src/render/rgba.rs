@@ -102,6 +102,30 @@ impl RgbaImage {
         }
         out
     }
+
+    /// Center this image on an opaque `bg`-colored canvas of `canvas_w`×`canvas_h`
+    /// (the canvas never shrinks below the image). Used by `folio print --bg` so
+    /// the emitted graphic fills its whole cell box with the embedder's theme
+    /// background instead of leaving the terminal's own background visible.
+    pub fn centered_on(&self, canvas_w: u32, canvas_h: u32, bg: [u8; 3]) -> RgbaImage {
+        let w = canvas_w.max(self.width);
+        let h = canvas_h.max(self.height);
+        let mut out = RgbaImage::new(w, h);
+        for px in out.data.chunks_exact_mut(4) {
+            px.copy_from_slice(&[bg[0], bg[1], bg[2], 255]);
+        }
+        let ox = ((w - self.width) / 2) as usize;
+        let oy = ((h - self.height) / 2) as usize;
+        let src_stride = self.width as usize * 4;
+        let dst_stride = w as usize * 4;
+        for row in 0..self.height as usize {
+            let dst_off = (oy + row) * dst_stride + ox * 4;
+            let src_off = row * src_stride;
+            out.data[dst_off..dst_off + src_stride]
+                .copy_from_slice(&self.data[src_off..src_off + src_stride]);
+        }
+        out
+    }
 }
 
 #[cfg(test)]

@@ -28,14 +28,22 @@ pub struct ImageDocument {
     img: Decoded,
 }
 
+/// Reject images whose declared dimensions exceed this on either axis — the
+/// cheapest guard against a "decompression bomb" (a tiny file claiming enormous
+/// dimensions), checked before any pixels are allocated.
+const MAX_IMAGE_DIM: u32 = 50_000;
+/// Cap total decode allocation so even an in-range-but-huge image (or an
+/// intermediate buffer) can't exhaust memory. 512 MiB ≈ a 128-megapixel RGBA
+/// image — far above any real page/photo, far below a bomb.
+const MAX_IMAGE_ALLOC: u64 = 512 * 1024 * 1024;
+
 impl ImageDocument {
-    pub fn open(path: &Path) -> Result<Self> {
+    /// Open `path`, flattening any transparency onto `bg` (white matches the PDF
+    /// renderer; an embedding UI may pass its own theme background instead).
+    pub fn open(path: &Path, bg: [u8; 3]) -> Result<Self> {
         let bytes = std::fs::read(path)
             .map_err(|e| anyhow::anyhow!("failed to read {}: {e}", path.display()))?;
-        // `load_from_memory` detects the format from the magic bytes and, for an
-        // animated GIF, decodes only the first frame — exactly the static view we
-        // want.
-        let decoded = image::load_from_memory(&bytes)
+        let decoded = decode_limited(&bytes, MAX_IMAGE_DIM, MAX_IMAGE_ALLOC)
             .map_err(|e| anyhow::anyhow!("could not decode image {}: {e}", path.display()))?;
         let mut img = decoded.to_rgba8();
         anyhow::ensure!(
@@ -43,9 +51,25 @@ impl ImageDocument {
             "image {} has zero size",
             path.display()
         );
-        flatten_onto_white(&mut img);
+        flatten_onto(&mut img, bg);
         Ok(Self { img })
     }
+}
+
+/// Decode an in-memory image with resource limits enforced, so a malicious or
+/// corrupt image can't OOM the process. Format is guessed from the magic bytes;
+/// an animated GIF decodes only its first frame — the static view we want.
+fn decode_limited(bytes: &[u8], max_dim: u32, max_alloc: u64) -> Result<image::DynamicImage> {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(max_dim);
+    limits.max_image_height = Some(max_dim);
+    limits.max_alloc = Some(max_alloc);
+
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    reader.limits(limits);
+    reader.decode().map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 impl Document for ImageDocument {
@@ -99,21 +123,22 @@ impl Document for ImageDocument {
     }
 }
 
-/// Composite any translucency onto opaque white so every pixel ends fully
-/// opaque, matching the white background the PDF renderer fills. Done once at
-/// open on the full-resolution image, before any resampling — so resizing never
-/// has to reason about alpha and transparent edges don't fringe.
-fn flatten_onto_white(img: &mut Decoded) {
+/// Composite any translucency onto the opaque background `bg` so every pixel
+/// ends fully opaque (white matches the PDF renderer; embedders may pass a UI
+/// theme color). Done once at open on the full-resolution image, before any
+/// resampling — so resizing never has to reason about alpha and transparent
+/// edges don't fringe.
+fn flatten_onto(img: &mut Decoded, bg: [u8; 3]) {
     for px in img.pixels_mut() {
         let [r, g, b, a] = px.0;
         if a != 255 {
             let a = a as u16;
             let inv = 255 - a;
-            // Straight-alpha over white: out = src*a + 255*(1-a).
+            // Straight-alpha over bg: out = src*a + bg*(1-a).
             px.0 = [
-                ((r as u16 * a + 255 * inv) / 255) as u8,
-                ((g as u16 * a + 255 * inv) / 255) as u8,
-                ((b as u16 * a + 255 * inv) / 255) as u8,
+                ((r as u16 * a + bg[0] as u16 * inv) / 255) as u8,
+                ((g as u16 * a + bg[1] as u16 * inv) / 255) as u8,
+                ((b as u16 * a + bg[2] as u16 * inv) / 255) as u8,
                 255,
             ];
         }
@@ -221,11 +246,52 @@ mod tests {
         }
     }
 
+    /// Encode an `w`×`h` opaque PNG into memory for the limit tests.
+    fn png_bytes(w: u32, h: u32) -> Vec<u8> {
+        let mut src = image::RgbaImage::new(w, h);
+        for px in src.pixels_mut() {
+            px.0 = [1, 2, 3, 255];
+        }
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(src)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .expect("encode png");
+        buf.into_inner()
+    }
+
     #[test]
-    fn flatten_makes_pixels_opaque_over_white() {
+    fn decode_limited_accepts_within_limits() {
+        let bytes = png_bytes(16, 8);
+        let img = decode_limited(&bytes, 50_000, 512 * 1024 * 1024).expect("decode");
+        assert_eq!((img.width(), img.height()), (16, 8));
+    }
+
+    #[test]
+    fn decode_limited_rejects_oversized_dimensions() {
+        // A 16-px-wide image with the max dimension pinned to 8 must be refused
+        // before any pixels are allocated — the decompression-bomb guard.
+        let bytes = png_bytes(16, 8);
+        assert!(decode_limited(&bytes, 8, 512 * 1024 * 1024).is_err());
+    }
+
+    #[test]
+    fn decode_limited_rejects_excessive_allocation() {
+        // Dimensions are fine, but the allocation budget is far too small to hold
+        // the decoded pixels — the second line of defense.
+        let bytes = png_bytes(64, 64);
+        assert!(decode_limited(&bytes, 50_000, 1024).is_err());
+    }
+
+    #[test]
+    fn flatten_makes_pixels_opaque_over_background() {
         let mut img = Decoded::new(1, 1);
         img.put_pixel(0, 0, Rgba([0, 0, 0, 0])); // fully transparent black
-        flatten_onto_white(&mut img);
+        flatten_onto(&mut img, [255, 255, 255]);
         assert_eq!(img.get_pixel(0, 0).0, [255, 255, 255, 255]); // becomes white
+
+        let mut img = Decoded::new(1, 1);
+        img.put_pixel(0, 0, Rgba([0, 0, 0, 0]));
+        flatten_onto(&mut img, [0x28, 0x26, 0x2b]); // theme background
+        assert_eq!(img.get_pixel(0, 0).0, [0x28, 0x26, 0x2b, 255]);
     }
 }
