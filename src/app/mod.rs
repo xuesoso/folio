@@ -19,9 +19,14 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crossterm::cursor::MoveTo;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
+};
 use crossterm::queue;
-use crossterm::style::{Attribute, Print, SetAttribute};
+use crossterm::style::{
+    Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
+};
 use crossterm::terminal::{Clear, ClearType};
 
 use crate::Result;
@@ -42,6 +47,15 @@ const MAX_FULL_PIXELS: u64 = 16_000_000;
 const ZOOM_STEP: f32 = 1.2;
 const ZOOM_MIN: f32 = 0.25;
 const ZOOM_MAX: f32 = 6.0;
+
+/// Status-bar (bottom menu bar) colors: a light dark-grey bar with black text.
+/// Fixed for both themes — the bar is chrome, not page content.
+const STATUS_BG: Color = Color::Rgb {
+    r: 0xa9,
+    g: 0xa9,
+    b: 0xa9,
+};
+const STATUS_FG: Color = Color::Black;
 
 /// One full-page RGBA render (already rotated for display) kept around so panning
 /// doesn't re-rasterize.
@@ -211,6 +225,7 @@ impl App {
                                 break;
                             }
                         }
+                        Event::Mouse(mouse) => self.handle_mouse(mouse)?,
                         Event::Resize(_, _) => {
                             let fresh = terminal::geometry::detect()?;
                             self.caps.size = if self.caps.size.cell_px_known {
@@ -281,6 +296,39 @@ impl App {
                 Ok(false)
             }
         }
+    }
+
+    /// Handle a mouse event: the wheel scrolls (flipping pages at a page edge,
+    /// exactly like `j`/`k`), left click advances a page and right click goes
+    /// back one. Only button *presses* act, so a click is one page, not two.
+    fn handle_mouse(&mut self, mouse: MouseEvent) -> Result<()> {
+        match self.mode {
+            Mode::View => match mouse.kind {
+                MouseEventKind::ScrollDown => self.scroll_down()?,
+                MouseEventKind::ScrollUp => self.scroll_up()?,
+                // Horizontal wheel/trackpad pans, mirroring h/l.
+                MouseEventKind::ScrollRight => self.pan_h(1.0)?,
+                MouseEventKind::ScrollLeft => self.pan_h(-1.0)?,
+                MouseEventKind::Down(MouseButton::Left) => self.next_page(),
+                MouseEventKind::Down(MouseButton::Right) => self.prev_page(false),
+                _ => {}
+            },
+            // Any click dismisses help, mirroring "any key closes".
+            Mode::Help => {
+                if matches!(mouse.kind, MouseEventKind::Down(_)) {
+                    self.close_overlay();
+                }
+            }
+            // In the list the wheel moves the selection; clicks are ignored so a
+            // stray one can't jump the document out from under the overlay.
+            Mode::BookmarkList { .. } => match mouse.kind {
+                MouseEventKind::ScrollDown => self.list_move(true),
+                MouseEventKind::ScrollUp => self.list_move(false),
+                _ => {}
+            },
+            Mode::Goto => {}
+        }
+        Ok(())
     }
 
     fn handle_view_key(&mut self, key: KeyEvent) -> Result<bool> {
@@ -379,22 +427,8 @@ impl App {
         let count = self.state.bookmarks.len();
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('\'') => self.close_bookmark_list(),
-            KeyCode::Char('j') | KeyCode::Down => {
-                if count > 0 {
-                    self.mode = Mode::BookmarkList {
-                        selected: (selected + 1).min(count - 1),
-                    };
-                    self.dirty = true;
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if selected > 0 {
-                    self.mode = Mode::BookmarkList {
-                        selected: selected - 1,
-                    };
-                    self.dirty = true;
-                }
-            }
+            KeyCode::Char('j') | KeyCode::Down => self.list_move(true),
+            KeyCode::Char('k') | KeyCode::Up => self.list_move(false),
             KeyCode::Char('d') => {
                 if selected < count {
                     self.state.bookmarks.remove(selected);
@@ -413,6 +447,24 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Move the bookmark-list selection one entry down (`down`) or up, clamped at
+    /// the ends. Shared by `j`/`k` and the mouse wheel.
+    fn list_move(&mut self, down: bool) {
+        let Mode::BookmarkList { selected } = self.mode else {
+            return;
+        };
+        let count = self.state.bookmarks.len();
+        let next = if down {
+            (selected + 1).min(count.saturating_sub(1))
+        } else {
+            selected.saturating_sub(1)
+        };
+        if next != selected {
+            self.mode = Mode::BookmarkList { selected: next };
+            self.dirty = true;
         }
     }
 
@@ -999,6 +1051,8 @@ impl App {
             "  ?                        this help",
             "  q / Esc                  quit (resumes here next time)",
             "",
+            "  mouse: wheel scrolls · left click next page · right click previous",
+            "",
             "  press any key to close",
         ];
         let out = self.term.out();
@@ -1020,9 +1074,10 @@ impl App {
             out,
             MoveTo(0, s.rows.saturating_sub(1)),
             Clear(ClearType::CurrentLine),
-            SetAttribute(Attribute::Reverse),
-            Print(truncate(&prompt, s.cols as usize)),
-            SetAttribute(Attribute::Reset),
+            SetBackgroundColor(STATUS_BG),
+            SetForegroundColor(STATUS_FG),
+            Print(fit_line(&prompt, s.cols as usize)),
+            ResetColor,
         )?;
         self.term.flush()?;
         Ok(())
@@ -1067,9 +1122,10 @@ impl App {
         queue!(
             self.term.out(),
             MoveTo(0, s.rows.saturating_sub(1)),
-            SetAttribute(Attribute::Reverse),
-            Print(truncate(&status, s.cols as usize)),
-            SetAttribute(Attribute::Reset),
+            SetBackgroundColor(STATUS_BG),
+            SetForegroundColor(STATUS_FG),
+            Print(fit_line(&status, s.cols as usize)),
+            ResetColor,
         )?;
         Ok(())
     }
@@ -1201,6 +1257,20 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Truncate *or* pad `s` to exactly `max` columns, so a colored line covers the
+/// whole row — an unpadded status bar would stop mid-row, leaving the rest of the
+/// bar in the terminal's own background.
+fn fit_line(s: &str, max: usize) -> String {
+    let n = s.chars().count();
+    if n >= max {
+        return s.chars().take(max).collect();
+    }
+    let mut line = String::with_capacity(s.len() + (max - n));
+    line.push_str(s);
+    line.extend(std::iter::repeat_n(' ', max - n));
+    line
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1294,6 +1364,15 @@ mod tests {
         // None cap (Full) -> render at native viewport resolution.
         let p = plan_view(ASPECT, &v, Fit::Width, 0.5, 0.0, true, None);
         assert_eq!(p.render_w, v.width_px);
+    }
+
+    #[test]
+    fn status_line_spans_exactly_the_row() {
+        // Short lines pad out (so the bar's background covers the whole row) and
+        // long ones are cut — either way the row is exactly `cols` wide.
+        assert_eq!(fit_line(" folio ", 10), " folio    ");
+        assert_eq!(fit_line("abcdefghij", 4), "abcd");
+        assert_eq!(fit_line("· rot 90°", 20).chars().count(), 20); // multi-byte
     }
 
     #[test]

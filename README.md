@@ -139,6 +139,20 @@ the per-file state. Zoom level is never read from the config.
 | `?` | Help overlay |
 | `q` / `Esc` | Quit (resumes here next time) |
 
+### Mouse
+
+| Input | Action |
+|---|---|
+| Wheel up / down | Scroll up / down (at a page edge, the next notch flips the page — same as `k`/`j`) |
+| Horizontal wheel / two-finger swipe | Pan left / right |
+| Left click | Next page |
+| Right click | Previous page |
+
+Only clicks and wheel notches are reported (no motion tracking), so the mouse
+stays out of the way while reading. As with any full-screen TUI, the terminal's
+own text selection needs the usual override while folio is running — hold
+`Shift` (xterm, kitty, Ghostty, GNOME Terminal) or `Option`/`Alt` (iTerm2).
+
 Bookmarks and resume state are stored per file under `~/.local/state/folio/`
 (honoring `XDG_STATE_HOME`) — the same path on Linux and macOS.
 
