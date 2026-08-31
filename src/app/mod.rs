@@ -36,6 +36,7 @@ use crate::config::Config;
 use crate::document::{Document, RenderRequest};
 use crate::render::rgba::RgbaImage;
 use crate::render::{Backend, EncodedImage, ImageProtocol, Placement, SrcRect, TermCaps};
+use crate::terminal::tty;
 use crate::terminal::{self, Terminal};
 use state::{Fit, Rotation, Sharpness, Theme};
 
@@ -201,11 +202,33 @@ impl App {
         }
     }
 
+    /// Re-detect the window geometry after a resize and force a full redraw.
+    /// Reached both from crossterm's `Event::Resize` and from our own SIGWINCH
+    /// wake-up (see `terminal::tty`).
+    fn on_resize(&mut self) -> Result<()> {
+        let fresh = terminal::geometry::detect()?;
+        self.caps.size = if self.caps.size.cell_px_known {
+            fresh.with_cell_px(self.caps.size.cell_w, self.caps.size.cell_h)
+        } else {
+            fresh
+        };
+        self.last_full = None;
+        self.force_clear = true;
+        self.dirty = true;
+        Ok(())
+    }
+
     pub fn run(&mut self) -> Result<()> {
         self.set_window_title()?;
         self.render()?;
         self.enqueue_prefetch();
         terminal::query::drain_stdin();
+
+        // Take over SIGWINCH for our own wait (see `terminal::tty`). The priming
+        // poll builds crossterm's event source — and registers its handler —
+        // first, so ours is the one that survives.
+        let _ = event::poll(Duration::ZERO);
+        tty::install_resize_wake();
 
         let mut quit = false;
         while !quit {
@@ -215,7 +238,29 @@ impl App {
                 Duration::from_millis(0)
             };
 
-            if event::poll(timeout)? {
+            // Wait on the terminal ourselves rather than blocking inside
+            // crossterm, whose event source spins forever once the terminal has
+            // hung up (see `terminal::tty`). Crossterm is asked first with a zero
+            // timeout — free, and it releases any event already parsed — and only
+            // ever gets to read an fd we have just seen alive.
+            if tty::hung_up() {
+                break; // terminal gone: fall through to the state-saving exit
+            }
+            let mut ready = event::poll(Duration::ZERO)?;
+            let mut resized = false;
+            if !ready && !timeout.is_zero() {
+                match tty::wait(timeout) {
+                    tty::Wait::Hangup => break,
+                    tty::Wait::Ready => ready = event::poll(Duration::ZERO)?,
+                    tty::Wait::Resized => {
+                        self.on_resize()?;
+                        resized = true;
+                    }
+                    tty::Wait::Timeout => {}
+                }
+            }
+
+            if ready {
                 // Drain the whole burst of pending events, then redraw once.
                 loop {
                     match event::read()? {
@@ -226,27 +271,23 @@ impl App {
                             }
                         }
                         Event::Mouse(mouse) => self.handle_mouse(mouse)?,
-                        Event::Resize(_, _) => {
-                            let fresh = terminal::geometry::detect()?;
-                            self.caps.size = if self.caps.size.cell_px_known {
-                                fresh.with_cell_px(self.caps.size.cell_w, self.caps.size.cell_h)
-                            } else {
-                                fresh
-                            };
-                            self.last_full = None;
-                            self.force_clear = true;
-                            self.dirty = true;
-                        }
+                        Event::Resize(_, _) => self.on_resize()?,
                         _ => {}
                     }
                     if self.break_batch {
                         self.break_batch = false;
                         break; // redraw the scroll edge before processing more input
                     }
+                    if tty::hung_up() {
+                        quit = true;
+                        break;
+                    }
                     if !event::poll(Duration::from_millis(0))? {
                         break;
                     }
                 }
+            }
+            if ready || resized {
                 if self.dirty {
                     self.render()?;
                     self.enqueue_prefetch();

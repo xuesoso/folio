@@ -5,6 +5,7 @@
 
 pub mod geometry;
 pub mod query;
+pub mod tty;
 
 use std::io::{self, BufWriter, Stdout, Write};
 

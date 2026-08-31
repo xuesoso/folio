@@ -128,6 +128,10 @@ fn gen_config() -> Result<()> {
     Ok(())
 }
 
+/// How long the hangup watchdog lets the event loop shut down cleanly (saving
+/// resume state) before it exits the process itself.
+const HANGUP_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Open a document and run the interactive viewer.
 fn run_viewer(args: cli::Args) -> Result<()> {
     // The user config is read up front: it supplies both the (opt-in) LaTeX
@@ -151,6 +155,14 @@ fn run_viewer(args: cli::Args) -> Result<()> {
     // Effective defaults, highest precedence first: CLI flags, then the user
     // config file; both override the remembered per-file state inside `App::new`.
     let defaults = config.with_cli_overrides(args.sharpness, args.theme);
+
+    // The terminal can vanish under us: window closed, emulator quit, ssh
+    // dropped. The SIGHUP that accompanies it reaches only the foreground
+    // process group, and a parent may catch or ignore it on our behalf, so it is
+    // not a shutdown we can count on. The event loop watches for the hangup
+    // itself; this is the backstop for when it cannot, so folio never survives as
+    // an invisible process spinning on a dead terminal.
+    terminal::tty::watch_hangup(HANGUP_GRACE);
 
     let mut app = app::App::new(term, caps, proto, doc, args.path, defaults);
     app.run()
