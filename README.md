@@ -163,17 +163,28 @@ Opening a Markdown file converts it to a PDF in memory (CommonMark via
 [pdf-writer](https://github.com/typst/pdf-writer)) and then views it like any
 other PDF — so zoom, pan, themes, sharpness, and bookmarks all apply.
 
-Supported: headings, paragraphs, **bold**/*italic*, inline `code`, fenced code
-blocks, ordered/unordered (and nested) lists, block quotes, and thematic breaks.
+Supported: headings, paragraphs, **bold**/*italic*/~~strikethrough~~, links
+(styled; not clickable), inline `code`, fenced code blocks, ordered/unordered (and
+nested) lists, task lists (drawn checkboxes), block quotes, thematic breaks,
+**tables** (column alignment, wrapped cells, header repeated across pages),
+**footnotes** (collected at the end of the document), and **math**.
+
+Math: `$…$` (inline) and `$$…$$` (display) are typeset by a built-in TeX-style
+engine with the **Latin Modern Math** font — fractions, radicals, scripts and
+limits, big operators, stretchy `\left…\middle…\right` delimiters, accents,
+`\mathbf`/`\mathbb`/`\mathcal`/…, `\text`, and the `matrix`/`pmatrix`/`bmatrix`/…,
+`cases`, `aligned`, `gathered`, and `array` environments. A formula using a command
+the engine doesn't know is shown as its TeX source instead. Dollar amounts like
+`$5 and $10` stay text. For full TeX (macros, packages), open the document as
+[LaTeX](#latex) instead.
 
 Fonts and symbols: body text uses the standard-14 Helvetica/Courier (which hayro
 draws from its bundled substitutes — no font data for normal text). Characters
 outside WinAnsi (Greek, math operators, arrows, …) are rendered from an embedded
-**DejaVu Sans** fallback, which is only included in documents that actually use
-such characters.
+**DejaVu Sans** fallback, and math from **Latin Modern Math**; each is only
+included in documents that actually use it.
 
-Not yet handled: tables, images, and math — `$…$` / `$$…$$` is shown as literal
-text (to typeset math, open the document as [LaTeX](#latex) instead).
+Not yet handled: images and raw HTML.
 
 ## LaTeX
 
@@ -218,8 +229,8 @@ page's background). Try it with `folio samples/sample.png`.
 ## Architecture
 
 - `document/` — the `Document` trait (the modular input seam), the hayro backend
-  (`hayro.rs`, panic-guarded), the Markdown (`markdown.rs`) and LaTeX (`latex.rs`)
-  → PDF converters, and the direct static-image backend (`image.rs`).
+  (`hayro.rs`, panic-guarded), the Markdown (`markdown/`, with its TeX math
+  typesetter in `markdown/math/`) and LaTeX (`latex.rs`) → PDF converters, and the direct static-image backend (`image.rs`).
 - `render/` — terminal capability detection (`caps`) and the `kitty` / `sixel`
   image protocols, behind an `ImageProtocol` trait (which also exposes optional
   region panning — transmit-once + sub-rectangle placement — for kitty).
@@ -235,4 +246,7 @@ MIT — see [LICENSE](LICENSE).
 
 The bundled Unicode fallback font, **DejaVu Sans** (`assets/fonts/`), is under its
 own permissive license — see
-[`assets/fonts/DejaVuSans-LICENSE`](assets/fonts/DejaVuSans-LICENSE).
+[`assets/fonts/DejaVuSans-LICENSE`](assets/fonts/DejaVuSans-LICENSE). The bundled
+math font, **Latin Modern Math** (`assets/fonts/LatinModernMath.otf`, unmodified),
+is under the GUST Font License — see
+[`assets/fonts/LatinModernMath-LICENSE`](assets/fonts/LatinModernMath-LICENSE).

@@ -41,8 +41,18 @@ fn main() {
 ## Symbols
 
 Non-Latin characters render from an embedded fallback font: Greek (α, β, π, θ, Σ),
-math (∑, ∫, √2, ∞, ≈, ≤, ≥, ≠, ×, ÷, ±), and arrows (→, ←, ⇒). LaTeX like
-`$E = mc^2$` is shown as text, not typeset.
+math (∑, ∫, √2, ∞, ≈, ≤, ≥, ≠, ×, ÷, ±), and arrows (→, ←, ⇒).
+
+## Math and tables
+
+Inline math like $E = mc^2$ is typeset, and so is display math:
+
+$$\int_0^1 x^2\,dx = \frac{1}{3}$$
+
+| Feature | Status |
+|:--------|:------:|
+| Tables  | ✓ |
+| Math    | ✓ |
 
 ---
 
