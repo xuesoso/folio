@@ -96,7 +96,7 @@ impl PtySession {
                 if libc::setsid() < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
-                if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0) < 0 {
+                if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY as _, 0) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 // Ignored dispositions survive exec, so this is folio in the
