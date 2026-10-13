@@ -32,6 +32,8 @@ use crate::render::rgba::RgbaImage;
 use crate::render::{EncodedImage, ImageProtocol, Placement, SrcRect, move_cursor, passthrough_wrap};
 
 const PLACEHOLDER: char = '\u{10EEEE}';
+/// Placement id of the single virtual placement each image gets on the tmux path.
+const VIRTUAL_PID: u32 = 1;
 const CHUNK: usize = 4096;
 
 pub struct KittyProtocol {
@@ -56,8 +58,13 @@ pub struct KittyProtocol {
 
 impl KittyProtocol {
     pub fn new(base_id: u32, tmux: bool) -> Self {
+        Self::with_ids([base_id, base_id.wrapping_add(1)], tmux)
+    }
+
+    /// Like [`new`](Self::new), with both alternating ids given explicitly.
+    pub fn with_ids(ids: [u32; 2], tmux: bool) -> Self {
         Self {
-            ids: [base_id, base_id.wrapping_add(1)],
+            ids,
             next: 0,
             shown: None,
             tmux,
@@ -130,7 +137,13 @@ impl KittyProtocol {
         let cols = at.cols.min(max);
         let rows = at.rows.min(max);
 
-        let controls = format!("a=T,U=1,f=100,i={},c={},r={},q=2", id, cols, rows);
+        // An explicit placement id (`p`) makes each transmit *replace* the
+        // virtual placement instead of adding one. Ghostty (1.3.1) keeps an
+        // id's old placements when it is re-transmitted, and placeholder cells
+        // without a placement id use an arbitrary one of them — so an embedder
+        // that re-sent at a new size (after a resize) could see the new image
+        // fitted to a stale grid: cropped and shifted.
+        let controls = format!("a=T,U=1,f=100,i={},p={},c={},r={},q=2", id, VIRTUAL_PID, cols, rows);
         self.emit_transmit(seq, &controls, &enc.payload);
 
         // fg encodes the image id; bg (when set) backs the cells so any sliver an
@@ -431,6 +444,7 @@ mod tests {
         let s = String::from_utf8_lossy(&out);
         assert!(s.contains("\x1bPtmux;"));
         assert!(s.contains("a=T,U=1,f=100"));
+        assert!(s.contains(",p=1,"), "a fixed placement id, so a re-send replaces it: {s}");
         assert!(s.contains("c=2,r=1"));
         assert!(s.contains("\x1b[38;2;112;100;102m")); // first id (base) fg
         assert_eq!(s.matches(PLACEHOLDER).count(), 2);

@@ -14,10 +14,36 @@ use std::io::Write;
 pub use caps::{Backend, TermCaps, detect_caps};
 use rgba::RgbaImage;
 
-/// A fixed image id reused for every page (each draw deletes the previous image
-/// under this id and transmits the new one). The bytes of "pdf", < 2^24 so it
-/// fits a 24-bit foreground color for kitty Unicode placeholders.
+/// `folio print`'s default image id when no `--image-id`/`$FOLIO_IMAGE_ID` is
+/// given — kept fixed so embedders that predate those (and delete this id to
+/// clear) keep working. The bytes of "pdf", < 2^24 so it fits a 24-bit
+/// foreground color for kitty Unicode placeholders.
 pub const IMAGE_ID: u32 = 0x0070_6466;
+
+/// The interactive viewer's two kitty image ids (it alternates between them so
+/// a new page is up before the old one is deleted).
+///
+/// Image ids belong to the *outer* terminal, which every tmux pane shares, so
+/// two viewers on a fixed id — side-by-side panes, say — point their
+/// placeholder cells at one image: both panes show whichever page was sent
+/// last. Each process gets its own pair instead, built from its pid, in ranges
+/// disjoint from the ids embedders hand `folio print` (rustranger uses its pid,
+/// which is below 2^22): `(1<<22)|pid` and `(1<<23)|pid`, all under the 2^24 a
+/// placeholder color can carry.
+pub fn viewer_image_ids() -> [u32; 2] {
+    viewer_ids_for_pid(std::process::id())
+}
+
+fn viewer_ids_for_pid(pid: u32) -> [u32; 2] {
+    let p = pid & 0x3F_FFFF;
+    let mut base = (1 << 22) | p;
+    // The legacy print id lives in the same range; an old embedder deleting it
+    // must not take our page with it. (0xC00000|p is used by nothing else.)
+    if base == IMAGE_ID || base == IMAGE_ID + 1 {
+        base = 0xC0_0000 | p;
+    }
+    [base, (1 << 23) | p]
+}
 
 /// Where an image sits on screen, in terminal cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,7 +125,7 @@ pub fn make_protocol(caps: &TermCaps) -> Box<dyn ImageProtocol> {
             // Inside tmux we must route image data through passthrough and place
             // it with Unicode placeholders; outside tmux we transmit directly.
             let tmux = caps.in_tmux && caps.passthrough_ok;
-            Box::new(kitty::KittyProtocol::new(IMAGE_ID, tmux))
+            Box::new(kitty::KittyProtocol::with_ids(viewer_image_ids(), tmux))
         }
         Backend::Sixel => Box::new(sixel::SixelProtocol::new()),
     }
@@ -132,6 +158,25 @@ pub fn passthrough_wrap(seq: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two viewers (e.g. in side-by-side tmux panes) must never share an image
+    /// id, nor collide with the ids embedders pass `folio print` (their pids,
+    /// below 2^22) or the legacy fixed print id.
+    #[test]
+    fn viewer_ids_are_per_process_and_disjoint_from_embedders() {
+        let a = viewer_ids_for_pid(1234);
+        let b = viewer_ids_for_pid(1235);
+        assert_ne!(a[0], a[1], "the two alternating ids differ");
+        assert!(a.iter().all(|id| !b.contains(id)), "{a:?} vs {b:?}");
+        for pid in [1, 1234, 99_999, (1 << 22) - 1, 0x30_6466, 0x30_6467] {
+            for id in viewer_ids_for_pid(pid) {
+                assert!(id >= 1 << 22, "never an embedder (pid) id: {id:#x}");
+                assert!(id < 1 << 24, "fits a placeholder color: {id:#x}");
+                assert!(id != IMAGE_ID && id != IMAGE_ID + 1, "never the legacy id");
+            }
+        }
+        assert_eq!(viewer_image_ids(), viewer_ids_for_pid(std::process::id()));
+    }
 
     #[test]
     fn passthrough_doubles_esc_and_wraps() {
