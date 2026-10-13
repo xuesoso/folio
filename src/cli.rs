@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use crate::Result;
-use crate::app::state::{Sharpness, Theme};
+use crate::app::state::{Sharpness, Theme, ThemeSetting};
 
 const USAGE: &str = "\
 Usage: folio <FILE> [options]
@@ -33,8 +33,9 @@ Commands:
 
 Options:
   --backend <auto|kitty|sixel>      Force a display protocol (default: auto-detect)
-  --theme <off|nord>                Color theme / dark mode (default: remembered
-                                    per file, else off)
+  --theme <off|nord|auto>           Color theme / dark mode (auto: nord when the
+                                    terminal background is dark, else off;
+                                    default: remembered per file, else off)
   --sharpness <low|medium|high|full>  Display sharpness vs. speed (kitty; default:
                                     remembered per file, else medium)
   -h, --help                        Print help
@@ -66,7 +67,7 @@ pub struct Args {
     /// Sharpness override; `None` means use the per-file/default value.
     pub sharpness: Option<Sharpness>,
     /// Theme override; `None` means use the per-file/default value.
-    pub theme: Option<Theme>,
+    pub theme: Option<ThemeSetting>,
 }
 
 /// A parsed top-level invocation.
@@ -146,7 +147,7 @@ pub fn parse() -> Result<Command> {
     let mut path: Option<PathBuf> = None;
     let mut backend = BackendChoice::Auto;
     let mut sharpness: Option<Sharpness> = None;
-    let mut theme: Option<Theme> = None;
+    let mut theme: Option<ThemeSetting> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -172,9 +173,9 @@ pub fn parse() -> Result<Command> {
             "--theme" => {
                 let value = args
                     .next()
-                    .ok_or_else(|| anyhow::anyhow!("--theme requires a value (off|nord)"))?;
-                theme = Some(Theme::parse(&value).ok_or_else(|| {
-                    anyhow::anyhow!("unknown theme '{value}' (expected off|nord)")
+                    .ok_or_else(|| anyhow::anyhow!("--theme requires a value (off|nord|auto)"))?;
+                theme = Some(ThemeSetting::parse(&value).ok_or_else(|| {
+                    anyhow::anyhow!("unknown theme '{value}' (expected off|nord|auto)")
                 })?);
             }
             "--sharpness" => {
@@ -300,7 +301,7 @@ fn parse_print(mut args: impl Iterator<Item = String>, env_id: Option<String>) -
     let path = path.ok_or_else(|| anyhow::anyhow!("print: missing file argument"))?;
     // `--theme auto` can only resolve once parsing is done: Nord dark mode
     // when the --bg box fill is dark, else the original page colours.
-    let theme = if theme_auto { auto_theme(bg) } else { theme };
+    let theme = if theme_auto { Theme::for_background(bg) } else { theme };
     Ok(Command::Print(PrintArgs {
         path,
         protocol,
@@ -340,24 +341,6 @@ fn parse_bg(v: &str) -> Result<Option<[u8; 3]>> {
     );
     let n = u32::from_str_radix(hex, 16).unwrap();
     Ok(Some([(n >> 16) as u8, (n >> 8) as u8, n as u8]))
-}
-
-/// `--theme auto`: Nord dark mode when the `--bg` box fill is a dark colour,
-/// else the original page colours. A missing or `none` background (terminal
-/// default) reads as light.
-fn auto_theme(bg: Option<[u8; 3]>) -> Theme {
-    bg.filter(|&rgb| relative_luminance(rgb) < 0.5)
-        .map(|_| Theme::Nord)
-        .unwrap_or(Theme::Off)
-}
-
-/// WCAG relative luminance of an sRGB colour (0 = black, 1 = white).
-fn relative_luminance([r, g, b]: [u8; 3]) -> f64 {
-    fn chan(c: u8) -> f64 {
-        let c = f64::from(c) / 255.0;
-        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
-    }
-    0.2126 * chan(r) + 0.7152 * chan(g) + 0.0722 * chan(b)
 }
 
 #[cfg(test)]

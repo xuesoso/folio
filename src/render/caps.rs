@@ -3,6 +3,7 @@
 //! In a single round-trip we ask the terminal for:
 //!   - its per-cell pixel size (`CSI 16 t`) and text-area pixel size (`CSI 14 t`),
 //!   - whether it supports the kitty graphics protocol (a kitty `a=q` query),
+//!   - optionally, its background colour (OSC 11), for `--theme auto`,
 //!   - its Device Attributes (DA1, `ESC [ c`) — which doubles as a terminator and
 //!     reports sixel support (attribute `4`).
 //!
@@ -39,14 +40,19 @@ pub struct TermCaps {
     pub in_tmux: bool,
     pub passthrough_ok: bool,
     pub size: TermSize,
+    /// Terminal background colour from the OSC 11 reply; `None` if it wasn't
+    /// asked for or the terminal didn't answer.
+    pub bg: Option<[u8; 3]>,
 }
 
 /// Probe the terminal and resolve which backend to use. `choice` lets the user
-/// force a backend; geometry/tmux are still detected either way.
+/// force a backend; geometry/tmux are still detected either way. `want_bg` also
+/// asks for the background colour (only needed to resolve `--theme auto`).
 pub fn detect_caps(
     term: &mut Terminal,
     mut size: TermSize,
     choice: BackendChoice,
+    want_bg: bool,
 ) -> Result<TermCaps> {
     let in_tmux = in_tmux();
     let passthrough_ok = in_tmux && tmux_passthrough_on();
@@ -56,6 +62,7 @@ pub fn detect_caps(
         in_tmux,
         passthrough_ok,
         !size.cell_px_known,
+        want_bg,
         size.cols,
         size.rows,
     )?;
@@ -74,6 +81,7 @@ pub fn detect_caps(
         in_tmux,
         passthrough_ok,
         size,
+        bg: probe.bg,
     })
 }
 
@@ -82,6 +90,7 @@ struct Probe {
     kitty_ok: bool,
     sixel: bool,
     cell_px: Option<(u16, u16)>,
+    bg: Option<[u8; 3]>,
 }
 
 fn run_probe(
@@ -89,6 +98,7 @@ fn run_probe(
     in_tmux: bool,
     passthrough_ok: bool,
     want_cell: bool,
+    want_bg: bool,
     cols: u16,
     rows: u16,
 ) -> Result<Probe> {
@@ -105,6 +115,11 @@ fn run_probe(
         req.extend_from_slice(KITTY_QUERY);
     } else if passthrough_ok {
         req.extend_from_slice(&passthrough_wrap(KITTY_QUERY));
+    }
+    if want_bg {
+        // Background colour. Sent raw even inside tmux, which answers it itself
+        // with the pane's colour (its outer terminal's default when unset).
+        req.extend_from_slice(b"\x1b]11;?\x1b\\");
     }
     req.extend_from_slice(b"\x1b[c"); // DA1 — terminator + sixel attribute
 
@@ -123,6 +138,7 @@ fn run_probe(
         kitty_ok: kitty_ok(&buf),
         sixel: da1_has_sixel(&buf),
         cell_px,
+        bg: parse_osc11(&buf),
     })
 }
 
@@ -237,6 +253,28 @@ fn kitty_ok(buf: &[u8]) -> bool {
     false
 }
 
+/// Parse an OSC 11 background reply, `ESC ] 11 ; rgb:R/G/B` ended by BEL or
+/// `ESC \`. Each channel is 1–4 hex digits (xterm's `XParseColor` form, usually
+/// 4); it is scaled to 8 bits.
+fn parse_osc11(buf: &[u8]) -> Option<[u8; 3]> {
+    let start = find(buf, b"\x1b]11;")? + 5;
+    let rest = &buf[start..];
+    let end = rest.iter().position(|&b| b == 0x07 || b == 0x1b)?;
+    let body = std::str::from_utf8(&rest[..end]).ok()?;
+    let mut chans = body.strip_prefix("rgb:")?.split('/');
+    let mut rgb = [0u8; 3];
+    for c in &mut rgb {
+        let hex = chans.next()?;
+        if hex.is_empty() || hex.len() > 4 {
+            return None;
+        }
+        let v = u32::from_str_radix(hex, 16).ok()?;
+        let max = (1u32 << (4 * hex.len())) - 1;
+        *c = ((v * 255 + max / 2) / max) as u8;
+    }
+    chans.next().is_none().then_some(rgb)
+}
+
 /// Parse a `ESC [ <code> ; <h> ; <w> t` report, returning `(width, height)`.
 /// Used for `CSI 16 t` (code 6, cell size) and `CSI 14 t` (code 4, text area).
 fn parse_csi_size(buf: &[u8], code: u32) -> Option<(u16, u16)> {
@@ -312,6 +350,23 @@ mod tests {
     fn ignores_wrong_code_and_short_reports() {
         assert_eq!(parse_csi_size(b"\x1b[4;800;1200t", 6), None);
         assert_eq!(parse_csi_size(b"\x1b[8;24;80t", 6), None); // resize report, not cell size
+    }
+
+    #[test]
+    fn osc11_background_reply() {
+        // 16-bit channels, ST-terminated (kitty, xterm, iTerm2).
+        assert_eq!(parse_osc11(b"\x1b]11;rgb:2e2e/3434/4040\x1b\\"), Some([0x2e, 0x34, 0x40]));
+        // BEL-terminated, 8-bit and 4-bit channels.
+        assert_eq!(parse_osc11(b"\x1b]11;rgb:ff/80/00\x07"), Some([0xff, 0x80, 0x00]));
+        assert_eq!(parse_osc11(b"\x1b]11;rgb:f/0/8\x07"), Some([0xff, 0x00, 0x88]));
+        // Mixed into the rest of the probe replies.
+        let buf = b"\x1b[6;20;10t\x1b]11;rgb:ffff/ffff/ffff\x1b\\\x1b[?62;4c";
+        assert_eq!(parse_osc11(buf), Some([0xff, 0xff, 0xff]));
+        // No reply, truncated, or malformed.
+        assert_eq!(parse_osc11(b"\x1b[?62;4c"), None);
+        assert_eq!(parse_osc11(b"\x1b]11;rgb:ffff/ffff"), None);
+        assert_eq!(parse_osc11(b"\x1b]11;rgb:ffff/ffff\x07"), None);
+        assert_eq!(parse_osc11(b"\x1b]11;rgb:zz/00/00\x07"), None);
     }
 
     #[test]

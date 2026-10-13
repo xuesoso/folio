@@ -168,8 +168,10 @@ impl App {
             .sharpness
             .or_else(|| state.sharpness.as_deref().and_then(Sharpness::parse))
             .unwrap_or_default();
+        // `auto` resolves against the background colour probed in `caps`.
         let theme = defaults
             .theme
+            .map(|t| t.resolve(caps.bg))
             .or_else(|| state.theme.as_deref().and_then(Theme::parse))
             .unwrap_or_default();
 

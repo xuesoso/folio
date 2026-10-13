@@ -58,7 +58,7 @@ binary, e.g. `cargo build --release --target aarch64-unknown-linux-musl`.
 
 ```
 folio <FILE> [--backend auto|kitty|sixel]
-             [--theme off|nord]
+             [--theme off|nord|auto]
              [--sharpness low|medium|high|full]
 folio gen-config   # write a starter config file (see below)
 folio print <FILE> [--protocol kitty|sixel] [--col N --row N --cols N --rows N]
@@ -90,6 +90,13 @@ a dark Nord background and a light Nord foreground, while **keeping the color of
 figures/images** (hue preserved, lightness inverted for dark mode); `off` is the
 original. Toggle live with `i`; remembered per file.
 
+`--theme auto` (or `theme = auto` in the config) picks `nord` when the terminal
+background is dark, else `off`. The background is queried from the terminal at
+startup (OSC 11, same probe as the capability checks), so it works the same on
+Linux and macOS in terminals that answer it (kitty, iTerm2, WezTerm, Ghostty,
+foot, xterm, …). A terminal that doesn't answer gets `off`; inside tmux the
+reply is tmux's own pane colour.
+
 `print` mode also takes `--theme auto`: `nord` when the `--bg` box fill is a dark
 colour, else `off`. An embedder that passes its own theme background as `--bg`
 (e.g. rustranger's `--bg %b`) then gets dark-mode previews exactly when its UI
@@ -115,7 +122,7 @@ existing config). Four settings are supported — `theme`, `sharpness`, `fit`, a
 `latex_engine`:
 
 ```toml
-theme = nord            # off | nord
+theme = nord            # off | nord | auto
 sharpness = high        # low | medium | high | full
 fit = width             # page | width   (zoom levels are not configurable)
 latex_engine = tectonic # command used to compile .tex files (see LaTeX, below)

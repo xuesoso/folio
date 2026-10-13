@@ -146,15 +146,17 @@ fn run_viewer(args: cli::Args) -> Result<()> {
     terminal::install_panic_hook();
     let mut term = terminal::Terminal::new()?;
 
-    let size = terminal::geometry::detect()?;
-    let caps = render::detect_caps(&mut term, size, args.backend)?;
-    // Discard any late-arriving probe replies so they aren't read as keystrokes.
-    terminal::query::drain_stdin();
-    let proto = render::make_protocol(&caps);
-
     // Effective defaults, highest precedence first: CLI flags, then the user
     // config file; both override the remembered per-file state inside `App::new`.
     let defaults = config.with_cli_overrides(args.sharpness, args.theme);
+
+    let size = terminal::geometry::detect()?;
+    // `theme = auto` needs the terminal background, asked for in the same probe.
+    let want_bg = defaults.theme == Some(app::state::ThemeSetting::Auto);
+    let caps = render::detect_caps(&mut term, size, args.backend, want_bg)?;
+    // Discard any late-arriving probe replies so they aren't read as keystrokes.
+    terminal::query::drain_stdin();
+    let proto = render::make_protocol(&caps);
 
     // The terminal can vanish under us: window closed, emulator quit, ssh
     // dropped. The SIGHUP that accompanies it reaches only the foreground

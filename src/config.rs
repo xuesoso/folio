@@ -6,18 +6,20 @@
 //! These defaults take precedence over the per-file remembered state, so a value
 //! set here is applied on every open; a command-line flag still overrides for a
 //! single run. Only `theme`, `sharpness`, and `fit` are configurable — zoom is a
-//! transient view state and intentionally not settable here.
+//! transient view state and intentionally not settable here. `theme` also takes
+//! `auto`, which picks `nord` or `off` at startup from the terminal's background
+//! colour (queried with OSC 11; an unanswered query counts as light → `off`).
 
 use std::path::PathBuf;
 
 use crate::Result;
-use crate::app::state::{Fit, Sharpness, Theme};
+use crate::app::state::{Fit, Sharpness, ThemeSetting};
 
 /// Defaults loaded from the user config file. Each field is `None` when the user
 /// did not set it, so it only overrides where a value was actually provided.
 #[derive(Debug, Default, Clone)]
 pub struct Config {
-    pub theme: Option<Theme>,
+    pub theme: Option<ThemeSetting>,
     pub sharpness: Option<Sharpness>,
     pub fit: Option<Fit>,
     /// Command used to compile `.tex` files. Opt-in: `None` means folio never
@@ -37,7 +39,7 @@ impl Config {
     /// Overlay command-line flags onto the config: a flag that was given wins over
     /// the config value (CLI is the highest-precedence source). Flags left unset
     /// (`None`) leave the config value in place.
-    pub fn with_cli_overrides(mut self, sharpness: Option<Sharpness>, theme: Option<Theme>) -> Config {
+    pub fn with_cli_overrides(mut self, sharpness: Option<Sharpness>, theme: Option<ThemeSetting>) -> Config {
         if sharpness.is_some() {
             self.sharpness = sharpness;
         }
@@ -64,7 +66,7 @@ impl Config {
             };
             let value = unquote(value.trim());
             match key.trim().to_ascii_lowercase().as_str() {
-                "theme" => cfg.theme = Theme::parse(value),
+                "theme" => cfg.theme = ThemeSetting::parse(value),
                 "sharpness" => cfg.sharpness = Sharpness::parse(value),
                 "fit" => cfg.fit = parse_fit(value),
                 "latex_engine" | "latex-engine" if !value.is_empty() => {
@@ -148,7 +150,10 @@ const DEFAULT_CONFIG: &str = "\
 # Uncomment a line to enable that setting. Keys are case-insensitive and quotes
 # are optional. Zoom level is intentionally not configurable.
 
-# Color theme / dark mode.              Values: off | nord
+# Color theme / dark mode.              Values: off | nord | auto
+# auto: nord when the terminal background is dark, else off. Detected at startup
+# by asking the terminal for its background colour (OSC 11); a terminal that
+# doesn't answer — some don't, and tmux reports its own pane colour — gets off.
 # theme = off
 
 # Display sharpness vs. speed (kitty).  Values: low | medium | high | full
@@ -191,6 +196,7 @@ pub fn write_default() -> Result<GenOutcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::state::Theme;
 
     #[test]
     fn empty_config_sets_nothing() {
@@ -201,7 +207,7 @@ mod tests {
     #[test]
     fn parses_all_three_settings() {
         let cfg = Config::parse("theme = nord\nsharpness = high\nfit = width\n");
-        assert_eq!(cfg.theme, Some(Theme::Nord));
+        assert_eq!(cfg.theme, Some(ThemeSetting::Fixed(Theme::Nord)));
         assert_eq!(cfg.sharpness, Some(Sharpness::High));
         assert_eq!(cfg.fit, Some(Fit::Width));
     }
@@ -210,14 +216,14 @@ mod tests {
     fn ignores_comments_blanks_and_unknown_keys() {
         let text = "# a comment\n\n  theme = off  \nbogus = 1\nwidth = 2\n";
         let cfg = Config::parse(text);
-        assert_eq!(cfg.theme, Some(Theme::Off));
+        assert_eq!(cfg.theme, Some(ThemeSetting::Fixed(Theme::Off)));
         assert!(cfg.sharpness.is_none() && cfg.fit.is_none());
     }
 
     #[test]
     fn strips_quotes_and_is_case_insensitive() {
         let cfg = Config::parse("THEME = \"Nord\"\nFit = 'Page'\n");
-        assert_eq!(cfg.theme, Some(Theme::Nord));
+        assert_eq!(cfg.theme, Some(ThemeSetting::Fixed(Theme::Nord)));
         assert_eq!(cfg.fit, Some(Fit::Page));
     }
 
@@ -226,6 +232,12 @@ mod tests {
         // Zoom is intentionally not configurable.
         assert_eq!(Config::parse("fit = zoom 1.5\n").fit, None);
         assert_eq!(Config::parse("fit = 150%\n").fit, None);
+    }
+
+    #[test]
+    fn theme_accepts_auto() {
+        assert_eq!(Config::parse("theme = auto\n").theme, Some(ThemeSetting::Auto));
+        assert_eq!(Config::parse("theme = 'AUTO'\n").theme, Some(ThemeSetting::Auto));
     }
 
     #[test]
@@ -283,6 +295,6 @@ mod tests {
     fn default_template_examples_are_valid_when_uncommented() {
         // Uncommenting the documented example lines must yield valid settings.
         let uncommented = DEFAULT_CONFIG.replace("# theme", "theme");
-        assert_eq!(Config::parse(&uncommented).theme, Some(Theme::Off));
+        assert_eq!(Config::parse(&uncommented).theme, Some(ThemeSetting::Fixed(Theme::Off)));
     }
 }

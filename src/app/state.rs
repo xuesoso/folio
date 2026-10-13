@@ -44,6 +44,15 @@ impl Theme {
         }
     }
 
+    /// The `auto` choice for a background colour: Nord dark mode when `bg` is
+    /// dark, else the original page colours. An unknown background (`None`)
+    /// reads as light.
+    pub fn for_background(bg: Option<[u8; 3]>) -> Self {
+        bg.filter(|&rgb| relative_luminance(rgb) < 0.5)
+            .map(|_| Theme::Nord)
+            .unwrap_or(Theme::Off)
+    }
+
     /// Apply the theme to RGBA8 pixel data in place (alpha untouched).
     pub fn apply(self, data: &mut [u8]) {
         match self {
@@ -297,6 +306,40 @@ impl Rotation {
     }
 }
 
+/// A configured theme: a fixed [`Theme`], or `auto` — resolved at startup from
+/// the terminal's background colour (see [`Theme::for_background`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeSetting {
+    Auto,
+    Fixed(Theme),
+}
+
+impl ThemeSetting {
+    pub fn parse(s: &str) -> Option<Self> {
+        if s.trim().eq_ignore_ascii_case("auto") {
+            return Some(ThemeSetting::Auto);
+        }
+        Theme::parse(s).map(ThemeSetting::Fixed)
+    }
+
+    /// The concrete theme, given the terminal background (only used by `Auto`).
+    pub fn resolve(self, bg: Option<[u8; 3]>) -> Theme {
+        match self {
+            ThemeSetting::Auto => Theme::for_background(bg),
+            ThemeSetting::Fixed(t) => t,
+        }
+    }
+}
+
+/// WCAG relative luminance of an sRGB colour (0 = black, 1 = white).
+fn relative_luminance([r, g, b]: [u8; 3]) -> f64 {
+    fn chan(c: u8) -> f64 {
+        let c = f64::from(c) / 255.0;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    }
+    0.2126 * chan(r) + 0.7152 * chan(g) + 0.0722 * chan(b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,6 +379,19 @@ mod tests {
         assert_eq!(Theme::parse("off"), Some(Theme::Off));
         assert_eq!(Theme::parse("invert"), None);
         assert_eq!(Theme::parse("bogus"), None);
+    }
+
+    #[test]
+    fn theme_setting_parses_and_resolves() {
+        assert_eq!(ThemeSetting::parse("Auto"), Some(ThemeSetting::Auto));
+        assert_eq!(ThemeSetting::parse("nord"), Some(ThemeSetting::Fixed(Theme::Nord)));
+        assert_eq!(ThemeSetting::parse("bogus"), None);
+        let dark = Some([0x1e, 0x1e, 0x2e]);
+        let light = Some([0xfd, 0xf6, 0xe3]);
+        assert_eq!(ThemeSetting::Auto.resolve(dark), Theme::Nord);
+        assert_eq!(ThemeSetting::Auto.resolve(light), Theme::Off);
+        assert_eq!(ThemeSetting::Auto.resolve(None), Theme::Off);
+        assert_eq!(ThemeSetting::Fixed(Theme::Off).resolve(dark), Theme::Off);
     }
 
     #[test]
