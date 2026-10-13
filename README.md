@@ -64,6 +64,7 @@ folio gen-config   # write a starter config file (see below)
 folio print <FILE> [--protocol kitty|sixel] [--col N --row N --cols N --rows N]
             [--cell-width N --cell-height N] [--tmux] [--page N]
             [--theme off|nord] [--sharpness low|medium|high|full]
+            [--bg RRGGBB|none] [--image-id N]
 ```
 
 `folio print` is a **headless** mode: it renders one page into a terminal cell
@@ -71,6 +72,12 @@ box and writes the graphics escapes to stdout, then exits — no interactive
 viewer. It lets another TUI embed a document/image preview inside a sub-rectangle
 of its own screen (e.g. [rustranger](https://github.com/xuesoso/rustranger)'s
 preview pane calls it per file).
+
+With kitty graphics, every embedder sharing one outer terminal (e.g. several tmux
+panes, which all feed the same terminal) needs its own image id, or each pane
+ends up showing whichever image was transmitted last. Pass `--image-id N`
+(1–16777215), or set `FOLIO_IMAGE_ID` in the renderer's environment so existing
+command lines pick it up unchanged; rustranger does the latter for you.
 
 `FILE` is a PDF, a Markdown file (`.md`, `.markdown`, `.mdown`, `.mkd`, `.mkdn`,
 `.mdwn`), a LaTeX file (`.tex`, `.latex`), or a static image (`.png`, `.jpg`,

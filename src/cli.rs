@@ -25,7 +25,9 @@ Commands:
                                     --cell-height, --tmux, --page, --theme off|nord,
                                     --sharpness low|medium|high|full,
                                     --bg RRGGBB|none (fill the cell box with this
-                                    background; transparent images flatten onto it)
+                                    background; transparent images flatten onto it),
+                                    --image-id N (kitty image id, 1..16777215;
+                                    default $FOLIO_IMAGE_ID, else a fixed id)
 
 Options:
   --backend <auto|kitty|sixel>      Force a display protocol (default: auto-detect)
@@ -114,6 +116,10 @@ pub struct PrintArgs {
     /// UI's theme background shows instead of the terminal's. None = white
     /// flatten, no padding (the aspect-fit image only).
     pub bg: Option<[u8; 3]>,
+    /// Kitty image id to transmit under. Embedders that can share one outer
+    /// terminal (several panes in tmux) must each pass their own, or every
+    /// pane's placeholders point at whichever image was transmitted last.
+    pub image_id: u32,
 }
 
 /// Parse `std::env::args`. Exits the process directly for `--help` / `--version`.
@@ -132,7 +138,7 @@ pub fn parse() -> Result<Command> {
     // `print` is a headless subcommand and must be the first argument.
     if args.peek().map(String::as_str) == Some("print") {
         args.next();
-        return parse_print(args);
+        return parse_print(args, std::env::var("FOLIO_IMAGE_ID").ok());
     }
 
     let mut path: Option<PathBuf> = None;
@@ -198,8 +204,10 @@ pub fn parse() -> Result<Command> {
     }))
 }
 
-/// Parse the flags for the `print` subcommand (see [`PrintArgs`]).
-fn parse_print(mut args: impl Iterator<Item = String>) -> Result<Command> {
+/// Parse the flags for the `print` subcommand (see [`PrintArgs`]). `env_id` is
+/// `$FOLIO_IMAGE_ID`, the image id used when `--image-id` isn't given — an
+/// embedder can set it once without having to change every user's command line.
+fn parse_print(mut args: impl Iterator<Item = String>, env_id: Option<String>) -> Result<Command> {
     fn u16v(v: Option<String>, name: &str) -> Result<u16> {
         v.ok_or_else(|| anyhow::anyhow!("{name} requires a value"))?
             .parse()
@@ -215,9 +223,17 @@ fn parse_print(mut args: impl Iterator<Item = String>) -> Result<Command> {
     let mut theme = Theme::Off;
     let mut sharpness = Sharpness::Full;
     let mut bg: Option<[u8; 3]> = None;
+    let mut image_id = match env_id.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        Some(v) => parse_image_id(v).map_err(|e| anyhow::anyhow!("FOLIO_IMAGE_ID: {e}"))?,
+        None => crate::render::IMAGE_ID,
+    };
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--image-id" => {
+                let v = args.next().ok_or_else(|| anyhow::anyhow!("--image-id requires a value"))?;
+                image_id = parse_image_id(&v).map_err(|e| anyhow::anyhow!("--image-id: {e}"))?;
+            }
             "--bg" => {
                 let v = args
                     .next()
@@ -287,7 +303,16 @@ fn parse_print(mut args: impl Iterator<Item = String>) -> Result<Command> {
         theme,
         sharpness,
         bg,
+        image_id,
     }))
+}
+
+/// Parse a kitty image id. Zero means "no id" to the protocol, and the tmux path
+/// encodes the id in a 24-bit foreground color, so only 1..=0xFFFFFF works.
+fn parse_image_id(v: &str) -> Result<u32> {
+    let id: u32 = v.trim().parse().map_err(|e| anyhow::anyhow!("{e} (got '{v}')"))?;
+    anyhow::ensure!((1..=0xFF_FFFF).contains(&id), "expected 1..=16777215 (got {id})");
+    Ok(id)
 }
 
 /// Parse a `--bg` value: `RRGGBB` (optionally `#`-prefixed) or `none`.
@@ -303,4 +328,41 @@ fn parse_bg(v: &str) -> Result<Option<[u8; 3]>> {
     );
     let n = u32::from_str_radix(hex, 16).unwrap();
     Ok(Some([(n >> 16) as u8, (n >> 8) as u8, n as u8]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn print_args(argv: &[&str], env_id: Option<&str>) -> Result<PrintArgs> {
+        let args = argv.iter().map(|s| s.to_string());
+        match parse_print(args, env_id.map(str::to_string))? {
+            Command::Print(p) => Ok(p),
+            _ => unreachable!("parse_print only returns Print"),
+        }
+    }
+
+    #[test]
+    fn image_id_defaults_to_the_fixed_id() {
+        assert_eq!(print_args(&["a.pdf"], None).unwrap().image_id, crate::render::IMAGE_ID);
+        // An empty variable is "unset", not an error.
+        assert_eq!(print_args(&["a.pdf"], Some("")).unwrap().image_id, crate::render::IMAGE_ID);
+    }
+
+    #[test]
+    fn image_id_comes_from_env_and_the_flag_wins() {
+        assert_eq!(print_args(&["a.pdf"], Some("4242")).unwrap().image_id, 4242);
+        let p = print_args(&["--image-id", "77", "a.pdf"], Some("4242")).unwrap();
+        assert_eq!(p.image_id, 77);
+    }
+
+    #[test]
+    fn image_id_must_fit_a_placeholder_color() {
+        assert!(print_args(&["--image-id", "0", "a.pdf"], None).is_err());
+        assert!(print_args(&["--image-id", "16777216", "a.pdf"], None).is_err());
+        assert!(print_args(&["--image-id", "x", "a.pdf"], None).is_err());
+        assert!(print_args(&["--image-id"], None).is_err());
+        assert!(print_args(&["a.pdf"], Some("0")).is_err());
+        assert_eq!(print_args(&["--image-id", "16777215", "a.pdf"], None).unwrap().image_id, 0xFF_FFFF);
+    }
 }

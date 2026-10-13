@@ -34,7 +34,7 @@ fn run() -> Result<()> {
 fn run_print(args: cli::PrintArgs) -> Result<()> {
     use std::io::Write;
 
-    use render::{ImageProtocol, Placement, IMAGE_ID};
+    use render::{ImageProtocol, Placement};
 
     let doc = document::open_document_with_bg(&args.path, None, args.bg)
         .with_context(|| format!("could not open {}", args.path.display()))?;
@@ -98,7 +98,7 @@ fn run_print(args: cli::PrintArgs) -> Result<()> {
     let mut proto: Box<dyn ImageProtocol> = match args.protocol {
         cli::PrintProtocol::Sixel => Box::new(render::sixel::SixelProtocol::new()),
         cli::PrintProtocol::Iterm => Box::new(render::iterm::ItermProtocol::new(args.tmux)),
-        cli::PrintProtocol::Kitty => Box::new(render::kitty::KittyProtocol::new(IMAGE_ID, args.tmux).with_bg(args.bg)),
+        cli::PrintProtocol::Kitty => Box::new(render::kitty::KittyProtocol::new(args.image_id, args.tmux).with_bg(args.bg)),
     };
     let enc = proto.encode(&rgba)?;
     let place = Placement {
