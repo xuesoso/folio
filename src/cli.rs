@@ -22,7 +22,9 @@ Commands:
                                     (headless — for embedding a preview in another
                                     TUI). Flags: --protocol kitty|sixel|iterm, --col,
                                     --row, --cols, --rows, --cell-width,
-                                    --cell-height, --tmux, --page, --theme off|nord,
+                                    --cell-height, --tmux, --page,
+                                    --theme off|nord|auto (auto: nord
+                                    when --bg is dark, else off),
                                     --sharpness low|medium|high|full,
                                     --bg RRGGBB|none (fill the cell box with this
                                     background; transparent images flatten onto it),
@@ -221,6 +223,8 @@ fn parse_print(mut args: impl Iterator<Item = String>, env_id: Option<String>) -
     let mut tmux = false;
     let mut page = 0usize;
     let mut theme = Theme::Off;
+    // `--theme auto` resolves after parsing (the --bg fill may follow it).
+    let mut theme_auto = false;
     let mut sharpness = Sharpness::Full;
     let mut bg: Option<[u8; 3]> = None;
     let mut image_id = match env_id.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
@@ -241,9 +245,14 @@ fn parse_print(mut args: impl Iterator<Item = String>, env_id: Option<String>) -
                 bg = parse_bg(&v)?;
             }
             "--theme" => {
-                theme = match args.next().as_deref().map(Theme::parse) {
-                    Some(Some(t)) => t,
-                    _ => anyhow::bail!("--theme expects off|nord"),
+                let value = args.next();
+                match value.as_deref().map(str::trim) {
+                    Some("auto") => theme_auto = true,
+                    other => {
+                        theme_auto = false;
+                        theme = Theme::parse(other.unwrap_or_default())
+                            .ok_or_else(|| anyhow::anyhow!("--theme expects off|nord|auto"))?;
+                    }
                 }
             }
             "--sharpness" => {
@@ -289,6 +298,9 @@ fn parse_print(mut args: impl Iterator<Item = String>, env_id: Option<String>) -
     }
 
     let path = path.ok_or_else(|| anyhow::anyhow!("print: missing file argument"))?;
+    // `--theme auto` can only resolve once parsing is done: Nord dark mode
+    // when the --bg box fill is dark, else the original page colours.
+    let theme = if theme_auto { auto_theme(bg) } else { theme };
     Ok(Command::Print(PrintArgs {
         path,
         protocol,
@@ -330,6 +342,24 @@ fn parse_bg(v: &str) -> Result<Option<[u8; 3]>> {
     Ok(Some([(n >> 16) as u8, (n >> 8) as u8, n as u8]))
 }
 
+/// `--theme auto`: Nord dark mode when the `--bg` box fill is a dark colour,
+/// else the original page colours. A missing or `none` background (terminal
+/// default) reads as light.
+fn auto_theme(bg: Option<[u8; 3]>) -> Theme {
+    bg.filter(|&rgb| relative_luminance(rgb) < 0.5)
+        .map(|_| Theme::Nord)
+        .unwrap_or(Theme::Off)
+}
+
+/// WCAG relative luminance of an sRGB colour (0 = black, 1 = white).
+fn relative_luminance([r, g, b]: [u8; 3]) -> f64 {
+    fn chan(c: u8) -> f64 {
+        let c = f64::from(c) / 255.0;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    }
+    0.2126 * chan(r) + 0.7152 * chan(g) + 0.0722 * chan(b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,5 +394,28 @@ mod tests {
         assert!(print_args(&["--image-id"], None).is_err());
         assert!(print_args(&["a.pdf"], Some("0")).is_err());
         assert_eq!(print_args(&["--image-id", "16777215", "a.pdf"], None).unwrap().image_id, 0xFF_FFFF);
+    }
+
+    #[test]
+    fn theme_auto_follows_the_box_fill() {
+        // Dark fills render in Nord; light fills, `none`, and a missing --bg
+        // (terminal default) keep the original page colours.
+        let p = print_args(&["--theme", "auto", "--bg", "282828", "a.pdf"], None).unwrap();
+        assert_eq!(p.theme, Theme::Nord);
+        for bg in ["fafafa", "none"] {
+            let p = print_args(&["--theme", "auto", "--bg", bg, "a.pdf"], None).unwrap();
+            assert_eq!(p.theme, Theme::Off);
+        }
+        assert_eq!(print_args(&["--theme", "auto", "a.pdf"], None).unwrap().theme, Theme::Off);
+
+        // Resolution happens after parsing, so --bg may follow --theme.
+        let p = print_args(&["--bg", "002b36", "--theme", "auto", "a.pdf"], None).unwrap();
+        assert_eq!(p.theme, Theme::Nord);
+
+        // The last --theme flag wins; explicit themes still parse.
+        assert_eq!(print_args(&["--theme", "nord", "--theme", "auto", "a.pdf"], None).unwrap().theme, Theme::Off);
+        assert_eq!(print_args(&["--theme", "auto", "--theme", "nord", "a.pdf"], None).unwrap().theme, Theme::Nord);
+        assert_eq!(print_args(&["a.pdf"], None).unwrap().theme, Theme::Off);
+        assert!(print_args(&["--theme", "solarized", "a.pdf"], None).is_err());
     }
 }

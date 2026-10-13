@@ -63,7 +63,7 @@ folio <FILE> [--backend auto|kitty|sixel]
 folio gen-config   # write a starter config file (see below)
 folio print <FILE> [--protocol kitty|sixel] [--col N --row N --cols N --rows N]
             [--cell-width N --cell-height N] [--tmux] [--page N]
-            [--theme off|nord] [--sharpness low|medium|high|full]
+            [--theme off|nord|auto] [--sharpness low|medium|high|full]
             [--bg RRGGBB|none] [--image-id N]
 ```
 
@@ -89,6 +89,11 @@ command lines pick it up unchanged; rustranger does the latter for you.
 a dark Nord background and a light Nord foreground, while **keeping the color of
 figures/images** (hue preserved, lightness inverted for dark mode); `off` is the
 original. Toggle live with `i`; remembered per file.
+
+`print` mode also takes `--theme auto`: `nord` when the `--bg` box fill is a dark
+colour, else `off`. An embedder that passes its own theme background as `--bg`
+(e.g. rustranger's `--bg %b`) then gets dark-mode previews exactly when its UI
+theme is dark.
 
 `--sharpness` trades crispness for speed (kitty only): `full` renders at native
 resolution (sharpest, slowest), lower tiers encode fewer pixels and let the
